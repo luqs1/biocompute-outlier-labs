@@ -134,3 +134,24 @@ mode) and its limitations.
 
 Simulator results are not evidence about CL1 tissue. Report them separately
 from device results.
+
+## Finding: the simulated neurons cannot learn from stimulation (`attention-brainslop`)
+
+We first tried to have the neurons learn a key→value attention block through
+STDP. In this simulator they can't. The coupling weights are the only lasting
+state, and they change only inside `LIFDataSource.apply_reward()`. Nothing
+calls that: the SDK talks to a data source only through `open`, `on_stims`,
+`read` and `close`. `experiments/stock_learning_check.py` drives the stock
+source the way the SDK does, with 200 key-then-value pairings. The maximum
+weight change is 0.0000 with plasticity off, with plasticity on, and with
+plasticity plus STDP on.
+
+```bash
+uv run python experiments/stock_learning_check.py src/organoid_simulator/lif_data_source.py
+```
+
+A modified simulator that applied STDP without a reward did learn the task.
+That change was reverted, because it altered the model to fit the experiment.
+See the git history of this branch. Learning experiments can only be dry-run
+here; they need a real CL1. Next on this branch: attention as reservoir
+computing on the stock model.
