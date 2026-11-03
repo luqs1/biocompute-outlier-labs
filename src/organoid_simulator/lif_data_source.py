@@ -324,6 +324,8 @@ class LIFDataSource(SimulatorDataSource):
         stdp_tau_pre_ms          : float = 20.0,
         stdp_tau_post_ms         : float = 20.0,
         stdp_ltd_ratio           : float = 0.5,
+        stdp_unsupervised        : bool  = False,
+        weights_dump_path        : str | None = None,
         connectivity             : np.ndarray | None = None,
         small_world_k            : int   = 8,
         small_world_rewire_p     : float = 0.15,
@@ -384,6 +386,19 @@ class LIFDataSource(SimulatorDataSource):
                 post traces -- these set the temporal pairing window.
             stdp_ltd_ratio: Strength of acausal (post-before-pre) depression
                 relative to causal (pre-before-post) potentiation.
+            stdp_unsupervised: OPT-IN. Plain (reward-free) biological STDP.
+                Implies ``plasticity=True`` and ``stdp=True``. At the end of every
+                ``read()`` batch the eligibility trace is consolidated into the
+                weights exactly as ``apply_reward(1.0)`` would (W += plasticity_lr
+                * elig, clip to [0, weight_max_mV], zero diagonal and dead
+                channels, reset elig), so learning happens without any call from
+                experiment code. The eligibility decay is disabled in this mode
+                (each pairing counts once, independent of batch size). With
+                ``coupling_gain_mV=0`` the weights start at exactly zero.
+            weights_dump_path: Optional debug path. If set, the current coupling
+                weights W (64, 64) are saved there as .npy about once per
+                simulated second and at close (atomic write via tmp +
+                os.replace). W[i, j] = weight from presynaptic j to post i.
             connectivity: Structural coupling graph as a (64, 64) matrix where
                 W[i, j] is the weight from presynaptic j to postsynaptic i. Pass
                 your own graph here (e.g. from metrics.graph_calculations or any
@@ -436,6 +451,13 @@ class LIFDataSource(SimulatorDataSource):
         self._stim_artifact        = bool(stim_artifact)
         self._artifact_gain        = float(stim_artifact_gain_uV_per_uA)
 
+        self._stdp_unsup           = bool(stdp_unsupervised)
+        if self._stdp_unsup:
+            plasticity = True
+            stdp = True
+            eligibility_tau_ms = float("inf")   # no decay: consolidated every batch
+        self._weights_dump_path    = None if weights_dump_path is None else str(weights_dump_path)
+        self._next_dump_ts         = 0
         self._plastic              = bool(plasticity)
         self._plasticity_lr        = float(plasticity_lr)
         self._weight_max           = float(weight_max_mV)
@@ -563,11 +585,13 @@ class LIFDataSource(SimulatorDataSource):
         self._pending_current.clear()
         self._pending_waveform.clear()
         self._next_read_ts = 0
+        self._next_dump_ts = FRAMES_PER_SECOND
 
         mode =f"spatial ({n} neurons -> {CHANNEL_COUNT} electrodes)" if self._spatial else "1:1 (64 neurons)"
         print(f"LIF data source is using seed: {seed}  [{mode}]")
 
     def close(self) -> None:
+        self._dump_weights()
         self._rng = None
         self._drive_rng = None
         self._noise_rng = None
@@ -760,6 +784,12 @@ class LIFDataSource(SimulatorDataSource):
         self._fired_prev = fired_prev
         self._next_read_ts = to_timestamp
 
+        if self._stdp_unsup:
+            self.apply_reward(1.0)   # reward-free STDP: consolidate every batch
+        if self._weights_dump_path is not None and to_timestamp >= self._next_dump_ts:
+            self._dump_weights()
+            self._next_dump_ts = (to_timestamp // FRAMES_PER_SECOND + 1) * FRAMES_PER_SECOND
+
         frames = np.clip(
             np.round(frames_uV / UV_PER_SAMPLE_UNIT), INT16_MIN, INT16_MAX
         ).astype(np.int16)
@@ -785,6 +815,19 @@ class LIFDataSource(SimulatorDataSource):
         self._W[list(NON_SPIKING), :] = 0.0
         self._W[:, list(NON_SPIKING)] = 0.0
         self._elig[...] = 0.0
+
+    def _dump_weights(self) -> None:
+        """Atomically save W to ``weights_dump_path`` (debug/visualisation)."""
+        path = self._weights_dump_path
+        if path is None or self._W is None:
+            return
+        W = self._W.toarray() if hasattr(self._W, "toarray") else self._W
+        tmp = path + ".tmp.npy"
+        try:
+            np.save(tmp, np.asarray(W, dtype=np.float32))
+            os.replace(tmp, path)
+        except OSError as e:
+            print(f"LIF data source: weights dump to {path} failed: {e}")
 
     @property
     def coupling_weights(self) -> np.ndarray:

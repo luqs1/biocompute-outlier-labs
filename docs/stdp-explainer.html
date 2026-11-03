@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STDP and the gap in the simulator</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --ink: #1d1d1b; --muted: #6b6a65; --line: #dedbd2;
+    --k: #2f6fb0; --v: #c2572b; --ltp: #2e8b57; --ltd: #b23a48; --dead: #bdbab1;
+    --card: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --ink: #ecebe6; --muted: #a09e96; --line: #3a3934;
+      --k: #6aa7e6; --v: #f08a5d; --ltp: #5cc48a; --ltd: #e0707f; --dead: #55534d; --card: #1f1f1d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 20px; margin: 48px 0 8px; }
+  .lede { color: var(--muted); margin: 0 0 8px; }
+  p { margin: 8px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 16px 0; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+  label { font-size: 14px; color: var(--muted); }
+  input[type=range] { width: 320px; max-width: 100%; }
+  .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow-x: auto; margin: 8px 0; }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .bad { color: var(--ltd); font-weight: 600; }
+  .good { color: var(--ltp); font-weight: 600; }
+  button { font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--card); color: var(--ink); cursor: pointer; }
+  button.on { border-color: var(--ink); }
+  svg text { fill: var(--ink); font-size: 12px; }
+  .legend span { margin-right: 14px; font-size: 13px; color: var(--muted); }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>STDP, and why the simulator never learns</h1>
+  <p class="lede">The attention-brainslop branch of biocompute-outlier-labs. In short: the timing of stimulation should change the connections between neurons. The simulator records the right timing but only changes connections when a reward arrives, and our experiment code has no way to send one.</p>
+
+  <h2>1. STDP: order matters</h2>
+  <p>Two neurons, <b style="color:var(--k)">pre</b> (A) and <b style="color:var(--v)">post</b> (B), with a connection A→B. Drag the slider to change when B fires relative to A.</p>
+  <div class="card">
+    <div class="row">
+      <label for="dt">Δt = t<sub>B</sub> − t<sub>A</sub></label>
+      <input id="dt" type="range" min="-60" max="60" value="5" step="1">
+      <span class="num" id="dtv">+5 ms</span>
+    </div>
+    <svg id="timeline" viewBox="0 0 800 120" width="100%" role="img" aria-label="Spike timeline"></svg>
+    <svg id="curve" viewBox="0 0 800 240" width="100%" role="img" aria-label="STDP curve"></svg>
+    <p id="verdict"></p>
+    <p style="font-size:14px;color:var(--muted)">This is the simulator's rule: <code>stdp_tau_pre_ms = 20</code>, <code>stdp_ltd_ratio = 0.5</code>. Weakening is half as strong as strengthening and falls off over the same ~20 ms window.</p>
+  </div>
+
+  <h2>2. Training with where + when</h2>
+  <p>The stimulation pattern carries both pieces: <i>where</i> is which electrodes we stimulate, and <i>when</i> is the timing between groups. Fire key group K, then value group V 5 ms later, many times. STDP strengthens K→V. Afterwards, stimulating K alone makes V fire. Nobody gives the neurons the answer; the timing alone trains them.</p>
+  <div class="card">
+    <div class="row">
+      <button id="train">Train 1 pairing (K then V)</button>
+      <button id="train10">×10</button>
+      <button id="rev">×10 reversed (V then K)</button>
+      <button id="query">Query: stim K alone</button>
+      <button id="reset">Reset</button>
+    </div>
+    <svg id="kv" viewBox="0 0 800 200" width="100%" role="img" aria-label="Key to value weight"></svg>
+    <p id="kvmsg" style="font-size:14px;color:var(--muted)">Weight K→V starts at 0, so a query does nothing.</p>
+  </div>
+
+  <h2>3. The gap in the simulator code</h2>
+  <p>Path through <code>src/organoid_simulator/lif_data_source.py</code>, from a spike to a changed weight:</p>
+  <div class="card">
+    <svg id="flow" viewBox="0 0 800 300" width="100%" role="img" aria-label="Code flow">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+    </svg>
+    <div class="row" style="margin-top:8px">
+      <button id="showBefore" class="on">As shipped</button>
+      <button id="showAfter">With our fix</button>
+    </div>
+    <p id="flowmsg"></p>
+  </div>
+
+  <p><b>What the STDP step does</b> (about line 700, every 40 µs frame). It only writes to <code>elig</code>, a short-lived record of which neurons fired together:</p>
+<pre>if stdp:
+    elig += np.outer(fired_now, x_pre)              # causal: pre before post → +
+    elig -= ltd_ratio * np.outer(y_post, fired_now)  # acausal: post before pre → −</pre>
+  <p><b>The only code that changes the weights</b> (line 770):</p>
+<pre>def apply_reward(self, reward):
+    self._W += self._plasticity_lr * reward * self._elig
+    ...
+    self._elig[...] = 0.0</pre>
+  <p>The data source runs <b>inside the SDK's simulator subprocess</b>. Our experiment talks to it only through <code>neurons.stim()</code> and spike readouts, and the SDK has no "reward" call. So <code>apply_reward</code> is never called, <code>elig</code> fades away (τ = 200 ms), and <b>W never changes</b>.</p>
+
+  <h2>4. The fix: plain STDP, no reward</h2>
+  <p>Biological STDP doesn't wait for a reward; the timing alone changes the synapse. The new option <code>stdp_unsupervised: true</code> applies <code>elig</code> to <code>W</code> at the end of every read batch, the same as calling <code>apply_reward(+1)</code> continuously. Only our simulator changes; the SDK and the experiment's API stay the same. The original reward-gated rule remains the default.</p>
+<pre>cl.sim.set_simulator_data_source(
+    "organoid_simulator.lif_data_source:make_lif_source",
+    config={"stdp_unsupervised": True, "coupling_gain_mV": 0.0},
+)</pre>
+  <p><span class="tag">honest caveat</span> This gives the simulator a learning rule it didn't run before. It's standard textbook STDP, but simulator results are still not evidence about real CL1 tissue.</p>
+
+  <h2>5. Attention on the 8×8 grid</h2>
+  <p>The layout the experiment uses. A query stimulates part of the key region; learned K→V connections carry that activity to the values. Each value fires in proportion to how much the query overlaps its key: Σ<sub>i</sub> overlap(q, k<sub>i</sub>) · v<sub>i</sub>. That's attention without softmax, because the model has no inhibitory neurons.</p>
+  <div class="card">
+    <div class="row">
+      <label for="mix">Query = K1 electrodes ⟷ K2 electrodes</label>
+      <input id="mix" type="range" min="0" max="4" value="2" step="1">
+      <span class="num" id="mixv">2 / 2</span>
+    </div>
+    <svg id="grid" viewBox="0 0 800 420" width="100%" role="img" aria-label="Electrode grid"></svg>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--k)"></i>key electrodes</span>
+      <span><i class="sw" style="background:var(--v)"></i>value electrodes</span>
+      <span><i class="sw" style="background:var(--dead)"></i>dead (0, 4, 7, 56, 63)</span>
+      <span>bright = stimulated / firing</span>
+    </div>
+    <p style="font-size:14px;color:var(--muted)">This is an illustration of the expected result, not simulator output. Real numbers come from <code>experiments/attention_kv.py</code>.</p>
+  </div>
+</main>
+
+<script>
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const txt = (parent, x, y, s, attrs = {}) => { const t = el('text', { x, y, ...attrs }, parent); t.textContent = s; return t; };
+const TAU = 20, LTD = 0.5;
+const stdp = dt => dt > 0 ? Math.exp(-dt / TAU) : dt < 0 ? -LTD * Math.exp(dt / TAU) : 0;
+
+// ---- 1. STDP ----
+const dtIn = document.getElementById('dt');
+function drawSTDP() {
+  const dt = +dtIn.value;
+  document.getElementById('dtv').textContent = (dt > 0 ? '+' : '') + dt + ' ms';
+  const tl = document.getElementById('timeline'); tl.innerHTML = '';
+  const x0 = 400, s = 4.5;
+  [['A (pre)', 35, css('--k'), 0], ['B (post)', 85, css('--v'), dt]].forEach(([name, y, c, t]) => {
+    el('line', { x1: 90, x2: 780, y1: y, y2: y, stroke: css('--line') }, tl);
+    txt(tl, 10, y + 4, name);
+    el('line', { x1: x0 + t * s, x2: x0 + t * s, y1: y - 18, y2: y + 18, stroke: c, 'stroke-width': 4, 'stroke-linecap': 'round' }, tl);
+  });
+  // window shading
+  el('rect', { x: x0, y: 8, width: TAU * s * 2, height: 104, fill: css('--ltp'), opacity: 0.07 }, tl);
+  el('rect', { x: x0 - TAU * s * 2, y: 8, width: TAU * s * 2, height: 104, fill: css('--ltd'), opacity: 0.07 }, tl);
+
+  const cv = document.getElementById('curve'); cv.innerHTML = '';
+  const X = d => 400 + d * 6, Y = w => 120 - w * 90;
+  el('line', { x1: 40, x2: 780, y1: Y(0), y2: Y(0), stroke: css('--line') }, cv);
+  el('line', { x1: X(0), x2: X(0), y1: 15, y2: 225, stroke: css('--line') }, cv);
+  let dp = '', dn = '';
+  for (let d = 0.5; d <= 60; d += 0.5) dp += (dp ? 'L' : 'M') + X(d) + ',' + Y(stdp(d));
+  for (let d = -60; d <= -0.5; d += 0.5) dn += (dn ? 'L' : 'M') + X(d) + ',' + Y(stdp(d));
+  el('path', { d: dp, fill: 'none', stroke: css('--ltp'), 'stroke-width': 2.5 }, cv);
+  el('path', { d: dn, fill: 'none', stroke: css('--ltd'), 'stroke-width': 2.5 }, cv);
+  txt(cv, X(8), 28, 'A before B → strengthen (LTP)', { fill: css('--ltp') });
+  txt(cv, X(-58), 220, 'B before A → weaken (LTD)', { fill: css('--ltd') });
+  txt(cv, 770, Y(0) + 16, 'Δt (ms)', { 'text-anchor': 'end' });
+  txt(cv, X(0) + 6, 20, 'Δweight');
+  const w = stdp(dt);
+  el('circle', { cx: X(dt), cy: Y(w), r: 7, fill: w > 0 ? css('--ltp') : w < 0 ? css('--ltd') : css('--muted') }, cv);
+  const v = document.getElementById('verdict');
+  if (Math.abs(w) < 0.05) v.innerHTML = 'Too far apart (or simultaneous): almost <b>no change</b> to A→B.';
+  else if (w > 0) v.innerHTML = `A fired ${dt} ms before B, so A probably helped cause B. A→B gets <span class="good">stronger</span> (×${w.toFixed(2)}).`;
+  else v.innerHTML = `B fired ${-dt} ms before A, so A couldn't have caused it. A→B gets <span class="bad">weaker</span> (×${w.toFixed(2)}).`;
+}
+dtIn.addEventListener('input', drawSTDP);
+
+// ---- 2. KV training toy ----
+let W = 0; const WMAX = 1, LR = 0.08, THRESH = 0.45; let lastQuery = null;
+function drawKV() {
+  const s = document.getElementById('kv'); s.innerHTML = '';
+  const fires = lastQuery !== null && W >= THRESH;
+  el('circle', { cx: 150, cy: 100, r: 42, fill: css('--k'), opacity: lastQuery !== null ? 1 : 0.35 }, s);
+  txt(s, 150, 105, 'K', { 'text-anchor': 'middle', fill: '#fff', 'font-size': 20, 'font-weight': 700 });
+  el('circle', { cx: 650, cy: 100, r: 42, fill: css('--v'), opacity: fires ? 1 : 0.35 }, s);
+  txt(s, 650, 105, 'V', { 'text-anchor': 'middle', fill: '#fff', 'font-size': 20, 'font-weight': 700 });
+  el('line', { x1: 195, x2: 600, y1: 100, y2: 100, stroke: css('--ink'), 'stroke-width': 1 + W * 14, opacity: 0.15 + W * 0.85, 'marker-end': 'url(#ah2)' }, s);
+  const d = el('defs', {}, s); const m = el('marker', { id: 'ah2', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 4, markerHeight: 4, orient: 'auto' }, d);
+  el('path', { d: 'M0,0 L10,5 L0,10 z', fill: css('--ink') }, m);
+  txt(s, 400, 70, `weight K→V = ${W.toFixed(2)}`, { 'text-anchor': 'middle', 'font-size': 15 });
+  el('rect', { x: 250, y: 160, width: 300, height: 10, rx: 5, fill: css('--line') }, s);
+  el('rect', { x: 250, y: 160, width: 300 * W / WMAX, height: 10, rx: 5, fill: css('--ltp') }, s);
+  el('line', { x1: 250 + 300 * THRESH, x2: 250 + 300 * THRESH, y1: 152, y2: 178, stroke: css('--ink') }, s);
+  txt(s, 250 + 300 * THRESH, 195, 'enough to make V fire', { 'text-anchor': 'middle', fill: css('--muted') });
+}
+function pair(n, reversed) {
+  lastQuery = null;
+  for (let i = 0; i < n; i++) W = Math.max(0, Math.min(WMAX, W + LR * stdp(reversed ? -5 : 5)));
+  document.getElementById('kvmsg').textContent = reversed
+    ? 'V fired 5 ms before K, so STDP weakened K→V (it can\'t go below 0).'
+    : `K then V 5 ms later, ${n === 1 ? 'once' : n + ' times'}: STDP strengthened K→V.`;
+  drawKV();
+}
+document.getElementById('train').onclick = () => pair(1, false);
+document.getElementById('train10').onclick = () => pair(10, false);
+document.getElementById('rev').onclick = () => pair(10, true);
+document.getElementById('reset').onclick = () => { W = 0; lastQuery = null; document.getElementById('kvmsg').textContent = 'Weight K→V starts at 0, so a query does nothing.'; drawKV(); };
+document.getElementById('query').onclick = () => { lastQuery = 1; drawKV();
+  document.getElementById('kvmsg').textContent = W >= THRESH ? 'Stimulated K alone, and V fired: the association is stored in the connection.' : 'Stimulated K alone, and V stayed silent: K→V is too weak. Train more.'; };
+
+// ---- 3. Flow diagram ----
+let after = false;
+function drawFlow() {
+  const s = document.getElementById('flow');
+  [...s.querySelectorAll(':scope > :not(defs)')].forEach(n => n.remove());
+  s.style.color = css('--ink');
+  const box = (x, y, w, h, title, sub, color, dashed) => {
+    el('rect', { x, y, width: w, height: h, rx: 8, fill: css('--card'), stroke: color || css('--ink'), 'stroke-width': 1.5, 'stroke-dasharray': dashed ? '6 4' : '' }, s);
+    txt(s, x + w / 2, y + 22, title, { 'text-anchor': 'middle', 'font-weight': 600, 'font-size': 13 });
+    if (sub) txt(s, x + w / 2, y + 40, sub, { 'text-anchor': 'middle', fill: css('--muted'), 'font-size': 11 });
+  };
+  const arrow = (x1, y1, x2, y2, color, dash) => el('line', { x1, y1, x2, y2, stroke: color || css('--ink'), 'stroke-width': 1.8, 'marker-end': 'url(#ah)', 'stroke-dasharray': dash || '', style: `color:${color || css('--ink')}` }, s);
+  // process boundary
+  el('rect', { x: 230, y: 10, width: 560, height: 280, rx: 12, fill: 'none', stroke: css('--line'), 'stroke-dasharray': '4 4' }, s);
+  txt(s, 240, 30, 'SDK simulator subprocess (LIF data source)', { fill: css('--muted'), 'font-size': 11 });
+  box(10, 60, 190, 56, 'experiment script', 'neurons.stim() / spikes', css('--k'));
+  box(260, 60, 160, 56, 'LIF step', 'neurons fire', null);
+  box(460, 60, 140, 56, 'elig', 'who fired together', null);
+  box(640, 60, 130, 56, 'W (weights)', 'what propagates', after ? css('--ltp') : css('--ltd'));
+  arrow(200, 88, 258, 88);
+  arrow(420, 88, 458, 88);
+  txt(s, 530, 140, 'fades, τ = 200 ms', { 'text-anchor': 'middle', fill: css('--muted'), 'font-size': 11 });
+  if (!after) {
+    box(460, 190, 160, 56, 'apply_reward(r)', 'never called', css('--ltd'), true);
+    arrow(540, 116, 540, 188, css('--ltd'), '5 4');
+    arrow(620, 218, 700, 118, css('--ltd'), '5 4');
+    arrow(105, 116, 455, 225, css('--ltd'), '3 5');
+    txt(s, 110, 200, 'no SDK call reaches it ✕', { fill: css('--ltd'), 'font-size': 12, 'font-weight': 600 });
+    document.getElementById('flowmsg').innerHTML = '<span class="bad">As shipped:</span> elig fills up with the right timing, then fades. Nothing moves it into W, so the network never learns.';
+  } else {
+    box(460, 190, 180, 56, 'auto-consolidate', 'every read batch (r = +1)', css('--ltp'));
+    arrow(540, 116, 540, 188, css('--ltp'));
+    arrow(640, 218, 700, 118, css('--ltp'));
+    arrow(705, 116, 340, 116 + 0.01, css('--ltp'));
+    txt(s, 520, 280, 'stdp_unsupervised: true', { 'text-anchor': 'middle', fill: css('--ltp'), 'font-size': 12, 'font-weight': 600 });
+    document.getElementById('flowmsg').innerHTML = '<span class="good">With our fix:</span> timing alone updates W, and the stronger connections change how the network fires next. The experiment script doesn\'t change at all.';
+  }
+}
+document.getElementById('showBefore').onclick = e => { after = false; e.target.classList.add('on'); document.getElementById('showAfter').classList.remove('on'); drawFlow(); };
+document.getElementById('showAfter').onclick = e => { after = true; e.target.classList.add('on'); document.getElementById('showBefore').classList.remove('on'); drawFlow(); };
+
+// ---- 5. Grid ----
+const K = [[8,9,16,17],[10,11,18,19],[12,13,20,21],[14,15,22,23]];
+const V = [[40,41,48,49],[42,43,50,51],[44,45,52,53],[46,47,54,55]];
+const DEAD = new Set([0,4,7,56,63]);
+const mixIn = document.getElementById('mix');
+function drawGrid() {
+  const n1 = +mixIn.value, n2 = 4 - n1;
+  document.getElementById('mixv').textContent = `${n1} / ${n2}`;
+  const stim = new Set([...K[1].slice(0, n1), ...K[2].slice(0, n2)]);
+  const vAct = [0, n1 / 4, n2 / 4, 0];
+  const s = document.getElementById('grid'); s.innerHTML = '';
+  const S = 44, ox = 30, oy = 30;
+  for (let ch = 0; ch < 64; ch++) {
+    const r = Math.floor(ch / 8), c = ch % 8, x = ox + c * S, y = oy + r * S;
+    let fill = css('--line'), op = 0.5;
+    const ki = K.findIndex(g => g.includes(ch)), vi = V.findIndex(g => g.includes(ch));
+    if (DEAD.has(ch)) { fill = css('--dead'); op = 1; }
+    else if (ki >= 0) { fill = css('--k'); op = stim.has(ch) ? 1 : 0.22; }
+    else if (vi >= 0) { fill = css('--v'); op = 0.18 + 0.82 * vAct[vi]; }
+    el('rect', { x: x + 3, y: y + 3, width: S - 6, height: S - 6, rx: 6, fill, opacity: op }, s);
+    txt(s, x + S / 2, y + S / 2 + 4, ch, { 'text-anchor': 'middle', 'font-size': 10, opacity: 0.7 });
+  }
+  K.forEach((g, i) => txt(s, ox + (2 * i + 1) * S, oy + 3 * S + 14, 'K' + i, { 'text-anchor': 'middle', fill: css('--k'), 'font-weight': 600 }));
+  V.forEach((g, i) => txt(s, ox + (2 * i + 1) * S, oy + 7 * S + 14, 'V' + i, { 'text-anchor': 'middle', fill: css('--v'), 'font-weight': 600 }));
+  txt(s, ox + 4 * S, oy + 4 * S - 4, 'gap: no electrodes used', { 'text-anchor': 'middle', fill: css('--muted'), 'font-size': 11 });
+  // bar chart of V output
+  const bx = 420, by = 60;
+  txt(s, bx, by - 20, 'value output (spikes, illustrative)', { fill: css('--muted') });
+  vAct.forEach((a, i) => {
+    el('rect', { x: bx, y: by + i * 60, width: 340, height: 34, rx: 6, fill: css('--line'), opacity: 0.5 }, s);
+    el('rect', { x: bx, y: by + i * 60, width: 340 * a, height: 34, rx: 6, fill: css('--v') }, s);
+    txt(s, bx - 8, by + i * 60 + 22, 'V' + i, { 'text-anchor': 'end', 'font-weight': 600 });
+    txt(s, bx + 346 * Math.max(a, 0.02) + 6 - (a > 0.85 ? 60 : 0), by + i * 60 + 22, (a * 100).toFixed(0) + '%', { fill: a > 0.85 ? '#fff' : css('--ink') });
+  });
+  txt(s, bx, by + 260, `output ≈ ${(n1/4).toFixed(2)}·v1 + ${(n2/4).toFixed(2)}·v2`, { 'font-size': 14 });
+  txt(s, bx, by + 282, 'weights = how much the query overlaps each key', { fill: css('--muted') });
+}
+mixIn.addEventListener('input', drawGrid);
+
+function all() { drawSTDP(); drawKV(); drawFlow(); drawGrid(); }
+all();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', all);
+</script>
+</body>
+</html>
