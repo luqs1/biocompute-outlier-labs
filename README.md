@@ -135,58 +135,8 @@ mode) and its limitations.
 Simulator results are not evidence about CL1 tissue. Report them separately
 from device results.
 
-## Finding: the simulated neurons cannot learn from stimulation (`attention-brainslop`)
+## Attention made of neurons (hackathon project)
 
-We first tried to have the neurons learn a key→value attention block through
-STDP. In this simulator they can't. The coupling weights are the only lasting
-state, and they change only inside `LIFDataSource.apply_reward()`. Nothing
-calls that: the SDK talks to a data source only through `open`, `on_stims`,
-`read` and `close`. `experiments/stock_learning_check.py` drives the stock
-source the way the SDK does, with 200 key-then-value pairings. The maximum
-weight change is 0.0000 with plasticity off, with plasticity on, and with
-plasticity plus STDP on.
-
-```bash
-uv run python experiments/stock_learning_check.py src/organoid_simulator/lif_data_source.py
-```
-
-A modified simulator that applied STDP without a reward did learn the task.
-That change was reverted, because it altered the model to fit the experiment.
-See the git history of this branch. Learning experiments can only be dry-run
-here; they need a real CL1. Next on this branch: attention as reservoir
-computing on the stock model.
-
-## Attention as reservoir computing on the stock simulator
-
-`experiments/attention_reservoir.py` uses the simulator exactly as given, with
-every default untouched and coupling 0. It tests whether the neurons can do the
-matching step of attention: query · key.
-
-- **Layout:** 4 keys × 8 bits = 32 electrodes (channels 8–39). In the viewer each
-  key is one column.
-- **Encoding:** pulse the key's 1-bits, then 5 ms later the query's 1-bits.
-  Each pulse is 0.5 µA, too weak to fire a neuron reliably on its own. Two pulses
-  add up, so a neuron behaves like a leaky AND gate: it fires 50% of the time
-  with both pulses and 15–18% with one.
-- **Readout:** the key whose electrodes spike most is the match.
-- **Control:** every key has four 1-bits, so counting the pulses per key can't
-  find the match. Only the neurons can.
-
-| Picks the best key (seed 42, chance 25%) | 1 presentation | 10 | 40 |
-|---|---|---|---|
-| Neurons: most spikes | 29.5% | 42.0% | 60.0% |
-| Computer only: most pulses | 22.7% | 26.0% | 26.7% |
-| Exact q·k | 100% | 100% | 100% |
-
-```bash
-CL_SDK_ACCELERATED_TIME=1 uv run python experiments/attention_reservoir.py --calibrate --no-hold
-CL_SDK_ACCELERATED_TIME=1 uv run python experiments/attention_reservoir.py --trials 600 --repeats 1 --no-hold
-CL_SDK_ACCELERATED_TIME=1 uv run python experiments/attention_reservoir.py --trials 120 --repeats 40 --no-hold
-uv run python experiments/attention_reservoir.py --realtime-demo --repeats 40
-```
-
-The multiplication does come from the neurons, because the computer-only control
-stays at chance. But a single presentation is very noisy: the model's background
-activity is about half the distance to threshold. We left that noise as it is.
-Coupling 4.0 made accuracy worse (27% at ×1, 35% at ×10). Simulator results
-only; they are not evidence about CL1 tissue.
+Can the simulated neurons do the matching step of attention themselves, rather
+than the computer around them? What we tried, the results, and what to try
+next are in [`docs/attention-brainslop.md`](docs/attention-brainslop.md).

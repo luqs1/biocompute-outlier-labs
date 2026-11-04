@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watching the neurons match a query</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --card: #fcfcfb; --ink: #1b1d22; --ink2: #4a5160; --muted: #6b7180; --line: #dedad0; --grid: #ebe8e1;
+    --key: #2f6fb0; --query: #c2571f; --ctrl: #8a8f98;
+    --seq0: #eef3fa; --seq1: #1f4e8c; --ok: #1f7a4d; --bad: #a33a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141619; --card: #1b1e23; --ink: #eceae4; --ink2: #b9bdc6; --muted: #9298a3; --line: #343841; --grid: #272b32;
+      --key: #6aa3e3; --query: #ec8a55; --ctrl: #8f95a0;
+      --seq0: #1e2633; --seq1: #9cc3f2; --ok: #5cc48a; --bad: #e0806f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 30px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 21px; margin: 52px 0 6px; }
+  .eyebrow { color: var(--key); font-weight: 600; font-size: 14px; margin: 0; }
+  .lede { color: var(--ink2); margin: 0; }
+  p { margin: 8px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin: 14px 0; }
+  .note { font-size: 14px; color: var(--muted); }
+  .callouts { display: grid; grid-template-columns: 28px 1fr; gap: 8px 10px; margin-top: 12px; font-size: 15px; }
+  .num { width: 24px; height: 24px; border-radius: 50%; background: var(--ink); color: var(--card); font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .shot { position: relative; }
+  .shot img, .shot svg { display: block; width: 100%; height: auto; border-radius: 8px; }
+  .shot svg { position: absolute; inset: 0; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; color: var(--ink2); margin-top: 8px; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .tip { position: fixed; pointer-events: none; background: var(--ink); color: var(--card); font-size: 13px; padding: 6px 9px; border-radius: 6px; opacity: 0; transition: opacity .08s; max-width: 260px; z-index: 10; }
+  details { margin-top: 10px; font-size: 14px; color: var(--ink2); }
+  table { border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 14px; }
+  td, th { padding: 4px 10px; border-bottom: 1px solid var(--line); text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .row2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">attention-brainslop · Luqmaan · stock simulator, nothing changed</p>
+  <h1>Watching the neurons match a query</h1>
+  <p class="lede">One trial of the reservoir experiment, step by step: four keys, one query, and the neurons voting for the best match. Every number on this page comes from a real run (seed 42, 40 tries per trial).</p>
+
+  <h2>1. What the SDK’s own viewer shows</h2>
+  <p>A screenshot of the CL1 SDK viewer during trial 1, annotated. Each box is one electrode; the four key columns are highlighted.</p>
+  <div class="card">
+    <div class="shot">
+      <img src="data:image/png;base64,__SHOT__" alt="CL1 SDK viewer: an 8 by 8 grid of electrode voltage traces with cyan pulse lines and green spike ticks">
+      <svg id="overlay" viewBox="0 0 1600 1000" aria-hidden="true"></svg>
+    </div>
+    <div class="callouts" id="callouts"></div>
+  </div>
+
+  <h2>2. The same trial, made readable</h2>
+  <p>Same layout as the viewer (one column per key, one row per bit), but each box now shows <b>how many times that neuron fired just after the query pulse</b>, summed over 40 tries. (Numbers from a re-run of the same trial with the same pulses, because the viewer can’t export counts.)</p>
+  <div class="card">
+    <svg id="grid" viewBox="0 0 940 560" width="100%" role="img" aria-label="Spike counts per electrode for trial 1"></svg>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--seq1)"></i>darker = more spikes</span>
+      <span><i class="sw" style="border:2.5px solid var(--key);background:transparent"></i>key bit is 1</span>
+      <span><i class="sw" style="background:var(--query);opacity:.85"></i>query bit is 1 (pulsed on every key)</span>
+    </div>
+    <details><summary>Show the numbers</summary><div id="gridtable"></div></details>
+  </div>
+
+  <h2>3. Inside four neurons, 40 tries each</h2>
+  <p>Each dot is a spike. Each row is one try. Time runs left to right from the key pulse. We count only the spikes in the shaded 2 ms after the query pulse.</p>
+  <div class="card">
+    <div class="row2" id="rasters"></div>
+    <p class="note">Same trial, four example electrodes, one for each combination of key bit and query bit.</p>
+  </div>
+
+  <h2>4. The neurons behave like a leaky AND gate</h2>
+  <p>Across all 8 trials (10,240 electrode-tries): how often a neuron spiked in the readout window, by which of its two bits were on.</p>
+  <div class="card">
+    <svg id="andbars" viewBox="0 0 940 275" width="100%" role="img" aria-label="Spike probability by bit combination"></svg>
+    <p class="note">A perfect AND gate would be 0% / 0% / 0% / 100%. “Both bits” fires about twice as often as “query bit only”: that gap is the multiplication the neurons do. The rest is noise. (Key-only is low because we only count spikes after the query pulse.)</p>
+  </div>
+
+  <h2>5. Did the neurons pick the right key?</h2>
+  <p>All 8 trials from this run. Bars are total spikes per key; the outlined bar is the true best match.</p>
+  <div class="card">
+    <svg id="trials" viewBox="0 0 940 420" width="100%" role="img" aria-label="Spikes per key for 8 trials"></svg>
+    <p class="note" id="trialnote"></p>
+  </div>
+
+  <h2>6. More tries, better answers</h2>
+  <p>Accuracy at picking the best key, from the larger runs (600, 300 and 120 trials). Chance is 25%.</p>
+  <div class="card">
+    <svg id="acc" viewBox="0 0 940 320" width="100%" role="img" aria-label="Accuracy by number of tries, neurons versus computer-only control"></svg>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--key)"></i>Neurons: most spikes</span>
+      <span><i class="sw" style="background:var(--ctrl)"></i>Computer only: most pulses (control)</span>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:40px">Simulator results only; they are not evidence about real CL1 tissue. Code: github.com/luqs1/biocompute-outlier-labs, branch attention-brainslop, <code>experiments/attention_reservoir.py</code>.</p>
+</main>
+<div class="tip" id="tip"></div>
+
+<script>
+const D = __DATA__;
+const NS = 'http://www.w3.org/2000/svg';
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const el = (tag, a = {}, p) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); if (p) p.appendChild(e); return e; };
+const txt = (p, x, y, s, a = {}) => { const t = el('text', { x, y, fill: css('--ink'), ...a }, p); t.textContent = s; return t; };
+const tip = document.getElementById('tip');
+function hover(node, html) {
+  node.style.cursor = 'default';
+  node.addEventListener('mousemove', e => { tip.innerHTML = html; tip.style.opacity = 1; tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 14) + 'px'; });
+  node.addEventListener('mouseleave', () => tip.style.opacity = 0);
+}
+function mix(a, b, t) {
+  const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const A = p(a), B = p(b);
+  return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * t).toString(16).padStart(2, '0')).join('');
+}
+const E = D.example;
+const bits = a => a.join('');
+
+// ---------- 1. viewer overlay ----------
+function drawOverlay() {
+  const s = document.getElementById('overlay'); s.innerHTML = '';
+  const Y = r => 60 + r * 112.4, X = c => c * 200;
+  // dim the non-key columns
+  el('rect', { x: 0, y: 60, width: 200, height: 900, fill: css('--card'), opacity: 0.72 }, s);
+  el('rect', { x: 1000, y: 60, width: 600, height: 900, fill: css('--card'), opacity: 0.72 }, s);
+  // header strip replaces the viewer controls
+  el('rect', { x: 0, y: 0, width: 1600, height: 58, fill: css('--card') }, s);
+  for (let i = 0; i < 4; i++) {
+    const best = i === E.best;
+    txt(s, X(i + 1) + 100, 40, `Key ${i}` + (best ? ' ★' : ''), { 'text-anchor': 'middle', 'font-size': 30, 'font-weight': 700, fill: best ? css('--key') : css('--ink') });
+    el('rect', { x: X(i + 1) + 2, y: 62, width: 196, height: 896, fill: 'none', stroke: best ? css('--key') : css('--line'), 'stroke-width': best ? 6 : 2, rx: 4 }, s);
+  }
+  txt(s, 1300, 40, 'unused electrodes', { 'text-anchor': 'middle', 'font-size': 26, fill: css('--muted') });
+  for (let r = 0; r < 8; r++) txt(s, 100, Y(r) + 64, `bit ${r}`, { 'text-anchor': 'middle', 'font-size': 28, fill: E.q[r] ? css('--query') : css('--muted'), 'font-weight': E.q[r] ? 700 : 400 });
+  // query rows
+  E.q.forEach((b, r) => { if (b) el('rect', { x: 196, y: Y(r) + 2, width: 808, height: 108, fill: 'none', stroke: css('--query'), 'stroke-width': 5, rx: 6, 'stroke-dasharray': '14 8' }, s); });
+  // numbered markers
+  const mark = (n, x, y) => { el('circle', { cx: x, cy: y, r: 24, fill: css('--ink') }, s); txt(s, x, y + 9, n, { 'text-anchor': 'middle', 'font-size': 26, 'font-weight': 700, fill: css('--card') }); };
+  mark(1, 1040, Y(2) + 56);
+  mark(2, 1040, Y(4) + 98);
+  mark(3, 1040, Y(1) + 56);
+  mark(4, 960, 96);
+  const c = document.getElementById('callouts'); c.innerHTML = '';
+  const qbits = E.q.map((b, i) => b ? i : null).filter(v => v !== null).join(', ');
+  [
+    `<b>Cyan full-height lines are pulses we sent.</b> Rows ${qbits} light up on all four keys: that’s the query (its 1-bits are ${qbits}), broadcast to every key.`,
+    `<b>Green ticks along the bottom of a box are spikes</b> the SDK detected on that electrode.`,
+    `<b>Grey shading flashes when an electrode has just spiked.</b> The trace itself is raw voltage (±100 µV).`,
+    `<b>Key 3 (★) is the true best match</b>: its bits ${bits(E.keys[3])} share three 1-bits with the query. You can’t see that from this view, which is why we built the ones below.`,
+  ].forEach((h, i) => { c.insertAdjacentHTML('beforeend', `<div class="num">${i + 1}</div><div>${h}</div>`); });
+}
+
+// ---------- 2. readable grid ----------
+function drawGrid() {
+  const s = document.getElementById('grid'); s.innerHTML = '';
+  const cw = 150, ch = 52, ox = 120, oy = 50;
+  const max = Math.max(...E.counts.flat());
+  for (let i = 0; i < 4; i++) {
+    const best = i === E.best, pick = i === E.pick;
+    txt(s, ox + i * (cw + 14) + cw / 2, 30, `Key ${i}` + (best ? ' ★' : ''), { 'text-anchor': 'middle', 'font-size': 17, 'font-weight': 700, fill: best ? css('--key') : css('--ink') });
+  }
+  for (let r = 0; r < 8; r++) {
+    const qb = E.q[r];
+    txt(s, ox - 16, oy + r * ch + ch / 2 + 5, `bit ${r}`, { 'text-anchor': 'end', 'font-size': 15, fill: qb ? css('--query') : css('--muted'), 'font-weight': qb ? 700 : 400 });
+    if (qb) el('rect', { x: 8, y: oy + r * ch + 8, width: 6, height: ch - 16, rx: 3, fill: css('--query') }, s);
+    for (let i = 0; i < 4; i++) {
+      const v = E.counts[i][r], kb = E.keys[i][r];
+      const x = ox + i * (cw + 14), y = oy + r * ch;
+      const cell = el('rect', { x: x + 1, y: y + 2, width: cw - 2, height: ch - 4, rx: 6, fill: mix(css('--seq0'), css('--seq1'), v / max) }, s);
+      if (kb) el('rect', { x: x + 2.5, y: y + 3.5, width: cw - 5, height: ch - 7, rx: 5, fill: 'none', stroke: css('--key'), 'stroke-width': 3 }, s);
+      const dark = v / max > 0.5;
+      txt(s, x + cw / 2, y + ch / 2 + 6, v, { 'text-anchor': 'middle', 'font-size': 17, 'font-weight': 600, fill: dark ? css('--card') : css('--ink') });
+      const what = kb && qb ? 'both bits on: the neuron should fire' : qb ? 'query bit only' : kb ? 'key bit only' : 'neither bit';
+      hover(cell, `Key ${i}, bit ${r}<br>${v} spikes in 40 tries<br>${what}`);
+    }
+  }
+  // totals
+  const ty = oy + 8 * ch + 22;
+  txt(s, ox - 16, ty + 8, 'total', { 'text-anchor': 'end', 'font-size': 15, 'font-weight': 700 });
+  txt(s, ox - 16, ty + 34, 'true match', { 'text-anchor': 'end', 'font-size': 14, fill: css('--muted') });
+  for (let i = 0; i < 4; i++) {
+    const x = ox + i * (cw + 14) + cw / 2;
+    txt(s, x, ty + 8, `${E.slot[i]} spikes` + (i === E.pick ? '  ← picked' : ''), { 'text-anchor': 'middle', 'font-size': 16, 'font-weight': i === E.pick ? 700 : 400, fill: i === E.pick ? css('--ok') : css('--ink') });
+    txt(s, x, ty + 34, `q·k = ${E.qk[i]}`, { 'text-anchor': 'middle', 'font-size': 14, fill: css('--muted') });
+  }
+  // annotation
+  txt(s, 930, oy + 4 * ch + 30, '', {});
+  document.getElementById('gridtable').innerHTML =
+    '<table><tr><th>bit</th><th>query</th>' + [0, 1, 2, 3].map(i => `<th>key ${i} bit</th><th>key ${i} spikes</th>`).join('') + '</tr>' +
+    E.q.map((qb, r) => `<tr><td>${r}</td><td>${qb}</td>` + [0, 1, 2, 3].map(i => `<td>${E.keys[i][r]}</td><td>${E.counts[i][r]}</td>`).join('') + '</tr>').join('') +
+    '<tr><td>total</td><td></td>' + [0, 1, 2, 3].map(i => `<td></td><td>${E.slot[i]}</td>`).join('') + '</tr></table>';
+}
+
+// ---------- 3. rasters ----------
+function drawRasters() {
+  const box = document.getElementById('rasters'); box.innerHTML = '';
+  const T0 = -5, T1 = 30;
+  D.picks.forEach(([slot, dim, label, kind]) => {
+    const pts = D.raster[`${slot}-${dim}`];
+    const s = el('svg', { viewBox: '0 0 460 250', width: '100%', role: 'img', 'aria-label': `Spike raster, key ${slot} bit ${dim}, ${label}` });
+    box.appendChild(s);
+    const X = t => 40 + (t - T0) / (T1 - T0) * 400, Y = r => 46 + r * 4.4;
+    el('rect', { x: X(5), y: 40, width: X(7) - X(5), height: 182, fill: css('--key'), opacity: 0.14 }, s);
+    el('line', { x1: X(0), x2: X(0), y1: 40, y2: 222, stroke: css('--key'), 'stroke-width': 2 }, s);
+    el('line', { x1: X(5), x2: X(5), y1: 40, y2: 222, stroke: css('--query'), 'stroke-width': 2 }, s);
+    el('line', { x1: 40, x2: 440, y1: 222, y2: 222, stroke: css('--line') }, s);
+    [0, 10, 20, 30].forEach(t => txt(s, X(t), 240, t + ' ms', { 'text-anchor': 'middle', 'font-size': 12, fill: css('--muted') }));
+    const inWin = pts.filter(p => p[1] >= 5 && p[1] < 7).length;
+    txt(s, 40, 18, `Key ${slot}, bit ${dim}: ${label}`, { 'font-size': 15, 'font-weight': 700 });
+    txt(s, 40, 34, `${inWin} spikes in the window · ${pts.length} in total`, { 'font-size': 13, fill: css('--muted') });
+    txt(s, X(0) + 3, 52, 'key', { 'font-size': 11, fill: css('--key') });
+    txt(s, X(5) + 3, 64, 'query', { 'font-size': 11, fill: css('--query') });
+    pts.forEach(([r, t]) => {
+      const c = el('circle', { cx: X(t), cy: Y(r), r: 2.8, fill: t >= 5 && t < 7 ? css('--ink') : css('--muted') }, s);
+      hover(c, `try ${r + 1}: spike at ${t.toFixed(2)} ms`);
+    });
+  });
+}
+
+// ---------- 4. AND bars ----------
+function drawAnd() {
+  const s = document.getElementById('andbars'); s.innerHTML = '';
+  const cats = [['neither', 'neither bit'], ['key', 'key bit only'], ['query', 'query bit only'], ['both', 'both bits']];
+  const vals = cats.map(([k]) => D.categories[k][0] / D.categories[k][1]);
+  const X0 = 170, W = 640, maxv = 0.3, bh = 36;
+  [0, 0.1, 0.2, 0.3].forEach(v => { const x = X0 + v / maxv * W; el('line', { x1: x, x2: x, y1: 20, y2: 240, stroke: css('--grid') }, s); txt(s, x, 262, Math.round(v * 100) + '%', { 'text-anchor': 'middle', 'font-size': 13, fill: css('--muted') }); });
+  cats.forEach(([k, label], i) => {
+    const y = 30 + i * 52, v = vals[i], w = Math.max(3, v / maxv * W);
+    txt(s, X0 - 12, y + bh / 2 + 5, label, { 'text-anchor': 'end', 'font-size': 15, 'font-weight': k === 'both' ? 700 : 400 });
+    const b = el('rect', { x: X0, y, width: w, height: bh, rx: 4, fill: k === 'both' ? css('--key') : css('--ctrl') }, s);
+    txt(s, X0 + w + 8, y + bh / 2 + 5, (v * 100).toFixed(1) + '%', { 'font-size': 15, 'font-weight': 600 });
+    hover(b, `${label}: spiked in ${D.categories[k][0]} of ${D.categories[k][1]} electrode-tries`);
+  });
+}
+
+// ---------- 5. trials ----------
+function drawTrials() {
+  const s = document.getElementById('trials'); s.innerHTML = '';
+  const pw = 215, ph = 170, gx = 20, gy = 40;
+  const max = Math.max(...D.trials.flatMap(t => t.slot));
+  let right = 0;
+  D.trials.forEach((t, n) => {
+    const col = n % 4, row = Math.floor(n / 4);
+    const x0 = col * (pw + gx) + 10, y0 = row * (ph + gy) + 10;
+    const ok = t.pick === t.best && !t.tie; if (ok) right++;
+    txt(s, x0, y0 + 14, `Trial ${n}`, { 'font-size': 14, 'font-weight': 700 });
+    txt(s, x0 + pw - 6, y0 + 14, ok ? '✓ right key' : '✗ wrong key', { 'text-anchor': 'end', 'font-size': 13, 'font-weight': 600, fill: ok ? css('--ok') : css('--bad') });
+    const bw = 40, base = y0 + ph - 22;
+    t.slot.forEach((v, i) => {
+      const h = v / max * (ph - 60), x = x0 + i * (bw + 12) + 4;
+      const b = el('rect', { x, y: base - h, width: bw, height: h, rx: 4, fill: i === t.pick ? css('--key') : css('--ctrl'), opacity: i === t.pick ? 1 : 0.55 }, s);
+      if (i === t.best) el('rect', { x: x - 3, y: base - h - 3, width: bw + 6, height: h + 3, rx: 5, fill: 'none', stroke: css('--ink'), 'stroke-width': 2, 'stroke-dasharray': '4 3' }, s);
+      txt(s, x + bw / 2, base + 16, `K${i}`, { 'text-anchor': 'middle', 'font-size': 12, fill: css('--muted') });
+      txt(s, x + bw / 2, base - h - 6, v, { 'text-anchor': 'middle', 'font-size': 11, fill: css('--ink2') });
+      hover(b, `Trial ${n}, key ${i}<br>${v} spikes · true match q·k = ${t.qk[i]}` + (i === t.best ? '<br>true best key' : '') + (i === t.pick ? '<br>neurons’ pick' : ''));
+    });
+  });
+  document.getElementById('trialnote').innerHTML = `Blue = the neurons’ pick (most spikes). Dashed outline = the true best key. <b>${right} of 8 right in this run</b>; over 120 trials the same settings got 60%. Small samples swing a lot, which is why the accuracy below uses hundreds of trials.`;
+}
+
+// ---------- 6. accuracy ----------
+function drawAcc() {
+  const s = document.getElementById('acc'); s.innerHTML = '';
+  const groups = [['1 try', 29.5, 22.7], ['10 tries', 42.0, 26.0], ['40 tries', 60.0, 26.7]];
+  const X0 = 60, Y0 = 270, H = 230, maxv = 100;
+  [0, 25, 50, 75, 100].forEach(v => { const y = Y0 - v / maxv * H; el('line', { x1: X0, x2: 900, y1: y, y2: y, stroke: v === 25 ? css('--muted') : css('--grid'), 'stroke-dasharray': v === 25 ? '6 5' : '' }, s); txt(s, X0 - 8, y + 4, v + '%', { 'text-anchor': 'end', 'font-size': 12, fill: css('--muted') }); });
+  txt(s, 900, Y0 - 25 / maxv * H - 6, 'chance (25%)', { 'text-anchor': 'end', 'font-size': 12, fill: css('--muted') });
+  groups.forEach(([label, nv, cv], g) => {
+    const gx = X0 + 60 + g * 270, bw = 64;
+    [[nv, css('--key'), 'Neurons'], [cv, css('--ctrl'), 'Computer only']].forEach(([v, c, who], j) => {
+      const x = gx + j * (bw + 4), h = v / maxv * H;
+      const b = el('rect', { x, y: Y0 - h, width: bw, height: h, rx: 4, fill: c }, s);
+      txt(s, x + bw / 2, Y0 - h - 8, v.toFixed(1) + '%', { 'text-anchor': 'middle', 'font-size': 14, 'font-weight': j === 0 ? 700 : 400 });
+      hover(b, `${who}, ${label}: ${v}%`);
+    });
+    txt(s, gx + bw + 2, Y0 + 22, label, { 'text-anchor': 'middle', 'font-size': 14 });
+  });
+}
+
+function all() { drawOverlay(); drawGrid(); drawRasters(); drawAnd(); drawTrials(); drawAcc(); }
+all();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', all);
+</script>
+</body>
+</html>
